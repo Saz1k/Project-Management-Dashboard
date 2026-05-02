@@ -69,3 +69,35 @@ class TaskResponse(BaseModel):
 from app.schemas.checklist import ChecklistItemResponse  # noqa: E402
 
 TaskResponse.model_rebuild()
+
+
+class BoardMini(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    title: str
+
+
+class ColumnMini(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    title: str
+    board: BoardMini
+
+
+class AssignedTaskResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True, populate_by_name=True)
+
+    id: int
+    title: str
+    description: str | None
+    column_id: int
+    position: int
+    assignee_id: int | None
+    due_date: datetime | None
+    created_at: datetime
+    priority: str | None = None
+    labels: list[LabelResponse] = []
+    checklist: list[ChecklistItemResponse] = Field(default=[], validation_alias="checklist_items")
+    column: ColumnMini

@@ -3,6 +3,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from app.models.checklist_item import ChecklistItem
+from app.models.column import Column
 from app.models.task import Task
 from app.schemas.task import TaskCreate, TaskMove, TaskUpdate
 
@@ -55,3 +56,17 @@ async def move(db: AsyncSession, task: Task, payload: TaskMove) -> Task:
 async def delete(db: AsyncSession, task: Task) -> None:
     await db.delete(task)
     await db.commit()
+
+
+async def get_assigned_to_user(db: AsyncSession, user_id: int) -> list[Task]:
+    result = await db.execute(
+        select(Task)
+        .where(Task.assignee_id == user_id)
+        .order_by(Task.due_date.asc().nulls_last())
+        .options(
+            selectinload(Task.labels),
+            selectinload(Task.checklist_items),
+            selectinload(Task.column).selectinload(Column.board),
+        )
+    )
+    return list(result.scalars().all())

@@ -1,7 +1,7 @@
 from fastapi import APIRouter, HTTPException, status
 
 from app.api.deps import CurrentUserDep, DbDep
-from app.schemas.task import TaskCreate, TaskMove, TaskResponse, TaskUpdate
+from app.schemas.task import AssignedTaskResponse, TaskCreate, TaskMove, TaskResponse, TaskUpdate
 from app.services import board as board_service
 from app.services import column as column_service
 from app.services import task as task_service
@@ -24,6 +24,11 @@ async def _get_task_and_check_access(task_id: int, user_id: int, db: DbDep):
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Task not found")
     await _check_column_access(task.column_id, user_id, db)
     return task
+
+
+@router.get("/tasks/assigned-to-me", response_model=list[AssignedTaskResponse])
+async def my_assigned_tasks(current_user: CurrentUserDep, db: DbDep) -> list[AssignedTaskResponse]:
+    return await task_service.get_assigned_to_user(db, current_user.id)
 
 
 @router.get("/columns/{column_id}/tasks", response_model=list[TaskResponse])
