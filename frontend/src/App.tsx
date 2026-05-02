@@ -87,6 +87,10 @@ type ApiError = {
   detail?: string | Array<{ msg: string; loc?: string[] }>;
 };
 
+type AssignedTask = Task & {
+  column: { id: number; title: string; board: { id: number; title: string } };
+};
+
 type TaskDraft = {
   title: string;
   description: string;
@@ -251,6 +255,9 @@ export function App() {
   const [pendingInvites, setPendingInvites] = useState<Invitation[]>([]);
   const [boardPendingInvites, setBoardPendingInvites] = useState<Invitation[]>([]);
   const [showInvites, setShowInvites] = useState(false);
+  const [myTasks, setMyTasks] = useState<AssignedTask[]>([]);
+  const [showMyTasks, setShowMyTasks] = useState(false);
+  const [myTasksLoading, setMyTasksLoading] = useState(false);
 
   const selectedBoard = useMemo(
     () => boards.find((board) => board.id === selectedBoardId) ?? null,
@@ -303,6 +310,21 @@ export function App() {
   }, [tasksByColumn, filters]);
 
   const hasFilters = filters.search || filters.assignee || filters.label || filters.priority || filters.overdue;
+
+  const myTasksByBoard = useMemo(() => {
+    const groups: Record<number, { board: { id: number; title: string }; tasks: AssignedTask[] }> = {};
+    for (const task of myTasks) {
+      const boardId = task.column.board.id;
+      if (!groups[boardId]) groups[boardId] = { board: task.column.board, tasks: [] };
+      groups[boardId].tasks.push(task);
+    }
+    return Object.values(groups);
+  }, [myTasks]);
+
+  const myOverdueCount = useMemo(
+    () => myTasks.filter((t) => t.due_date && new Date(t.due_date) < new Date()).length,
+    [myTasks],
+  );
 
   useEffect(() => {
     if (!token) {
@@ -430,6 +452,18 @@ export function App() {
       setComments(taskComments);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to load comments");
+    }
+  }
+
+  async function loadMyTasks() {
+    try {
+      setMyTasksLoading(true);
+      const tasks = await request<AssignedTask[]>("/tasks/assigned-to-me", {}, token);
+      setMyTasks(tasks);
+    } catch {
+      setMyTasks([]);
+    } finally {
+      setMyTasksLoading(false);
     }
   }
 
@@ -911,14 +945,26 @@ export function App() {
           <span className="brand-name">PM Board</span>
         </div>
 
+        <button
+          type="button"
+          className={`board-item my-tasks-btn ${showMyTasks ? "active" : ""}`}
+          onClick={() => { setShowMyTasks(true); setSelectedBoardId(null); setShowNewBoard(false); setSidebarOpen(false); void loadMyTasks(); }}
+        >
+          <span className="board-item-icon">✓</span>
+          <span className="board-item-text">
+            <strong>Мои задачи</strong>
+            <small>{myOverdueCount > 0 ? `⚠ ${myOverdueCount} просрочено` : "Назначено вам"}</small>
+          </span>
+        </button>
+
         <div className="sidebar-section-label">Мои доски</div>
         <div className="board-list">
           {boards.map((board) => (
             <button
               key={board.id}
               type="button"
-              className={`board-item ${board.id === selectedBoardId ? "active" : ""}`}
-              onClick={() => { setSelectedBoardId(board.id); setShowNewBoard(false); setSidebarOpen(false); }}
+              className={`board-item ${!showMyTasks && board.id === selectedBoardId ? "active" : ""}`}
+              onClick={() => { setSelectedBoardId(board.id); setShowMyTasks(false); setShowNewBoard(false); setSidebarOpen(false); }}
             >
               <span className="board-item-icon">{board.title.charAt(0).toUpperCase()}</span>
               <span className="board-item-text">
@@ -980,7 +1026,83 @@ export function App() {
       <div className="main-area">
         {error && <div className="alert error top-alert">{error}</div>}
 
-        {selectedBoard ? (
+        {showMyTasks ? (
+          <div className="my-tasks-view">
+            <div className="board-bar">
+              <div className="board-bar-left">
+                <h1 className="board-title">Мои задачи</h1>
+                <div className="board-stats">
+                  <span>{myTasks.length} задач</span>
+                  {myOverdueCount > 0 && <span className="stat-danger">⚠ {myOverdueCount} просрочено</span>}
+                </div>
+              </div>
+              <div className="board-bar-right">
+                <button type="button" className="bar-btn" onClick={() => void loadMyTasks()} disabled={myTasksLoading}>
+                  {myTasksLoading ? "Загрузка…" : "↻ Обновить"}
+                </button>
+              </div>
+            </div>
+
+            {myTasksLoading && <div className="my-tasks-loading">Загрузка задач…</div>}
+
+            {!myTasksLoading && myTasks.length === 0 && (
+              <div className="empty-state">
+                <div className="empty-state-icon">✓</div>
+                <h2>Нет назначенных задач</h2>
+                <p>Задачи, в которых вы указаны исполнителем, появятся здесь.</p>
+              </div>
+            )}
+
+            {!myTasksLoading && myTasksByBoard.map(({ board, tasks }) => (
+              <div key={board.id} className="my-tasks-group">
+                <div className="my-tasks-group-header">
+                  <span className="my-tasks-board-icon">{board.title.charAt(0).toUpperCase()}</span>
+                  <span className="my-tasks-board-title">{board.title}</span>
+                  <span className="col-count">{tasks.length}</span>
+                  <button
+                    type="button"
+                    className="ghost-button my-tasks-open-board"
+                    onClick={() => { setSelectedBoardId(board.id); setShowMyTasks(false); }}
+                  >
+                    Открыть доску →
+                  </button>
+                </div>
+                <div className="my-tasks-list">
+                  {tasks.map((task) => {
+                    const isOverdue = task.due_date && new Date(task.due_date) < new Date();
+                    return (
+                      <div
+                        key={task.id}
+                        className={`list-row my-task-row${isOverdue ? " overdue-row" : ""}`}
+                        onClick={() => { setSelectedBoardId(board.id); setShowMyTasks(false); }}
+                        title="Открыть доску с задачей"
+                      >
+                        <div className="list-row-main">
+                          {task.priority && (
+                            <span className="priority-badge" style={{ color: PRIORITY_COLOR[task.priority as Priority], background: `${PRIORITY_COLOR[task.priority as Priority]}18`, borderColor: `${PRIORITY_COLOR[task.priority as Priority]}40` }}>
+                              {PRIORITY_LABEL[task.priority as Priority]}
+                            </span>
+                          )}
+                          <span className="list-row-title">{task.title}</span>
+                          <span className="my-task-column-hint">· {task.column.title}</span>
+                        </div>
+                        <div className="list-row-meta">
+                          {task.labels.map((label) => (
+                            <span key={label.id} className="task-label" style={{ background: `${label.color}22`, borderColor: `${label.color}55`, color: label.color }}>{label.name}</span>
+                          ))}
+                          {task.due_date && <span className={`task-due ${isOverdue ? "overdue" : ""}`}>📅 {formatDate(task.due_date)}</span>}
+                          {task.checklist.length > 0 && (
+                            <span className="task-due">{task.checklist.filter((i) => i.completed).length}/{task.checklist.length} ✓</span>
+                          )}
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            ))}
+          </div>
+        ) : selectedBoard ? (
           <>
             {/* Board topbar */}
             <div className="board-bar">

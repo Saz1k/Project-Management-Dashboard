@@ -1062,6 +1062,68 @@ input[type="datetime-local"] { color-scheme: light; }
 .list-row-meta { display: flex; align-items: center; flex-wrap: wrap; gap: 6px; flex: none; }
 .list-row .move-chip { flex: none; }
 
+/* ── My Tasks view ────────────────────────────────── */
+.my-tasks-view {
+  flex: 1;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+.my-tasks-loading {
+  padding: 32px;
+  text-align: center;
+  font-size: .84rem;
+  color: var(--muted);
+}
+.my-tasks-group {
+  margin: 0 24px 20px;
+  background: var(--surface);
+  border: 1.5px solid var(--border);
+  border-radius: var(--r-lg);
+  overflow: hidden;
+}
+.my-tasks-group-header {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 16px;
+  background: var(--surface-2);
+  border-bottom: 1.5px solid var(--border);
+}
+.my-tasks-board-icon {
+  width: 26px;
+  height: 26px;
+  border-radius: var(--r-sm);
+  background: rgba(129,140,248,.2);
+  color: #818cf8;
+  font-size: .78rem;
+  font-weight: 700;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
+.my-tasks-board-title {
+  font-size: .84rem;
+  font-weight: 700;
+  flex: 1;
+}
+.my-tasks-open-board {
+  font-size: .76rem;
+  padding: .25rem .6rem;
+  flex-shrink: 0;
+}
+.my-tasks-list { display: flex; flex-direction: column; }
+.my-task-row { cursor: pointer; }
+.my-task-column-hint {
+  font-size: .76rem;
+  color: var(--muted);
+  flex-shrink: 0;
+}
+.overdue-row { background: rgba(239,68,68,.04); }
+.overdue-row:hover { background: rgba(239,68,68,.08) !important; }
+
 /* ── Responsive ───────────────────────────────────── */
 @media (max-width: 1100px) {
   .modal-body { grid-template-columns: 1fr; }
@@ -1207,4 +1269,9 @@ input[type="datetime-local"] { color-scheme: light; }
   .list-view { padding: 10px; }
   .task-list-row { padding: 10px 12px; gap: 8px; }
   .task-list-meta { flex-wrap: wrap; gap: 4px; }
+
+  /* my tasks */
+  .my-tasks-group { margin: 0 10px 12px; }
+  .my-tasks-group-header { padding: 8px 10px; gap: 8px; }
+  .my-tasks-open-board { font-size: .72rem; }
 }
