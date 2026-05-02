@@ -247,6 +247,7 @@ export function App() {
   const [showFilters, setShowFilters] = useState(false);
   const [newChecklistText, setNewChecklistText] = useState("");
   const [addMemberSearch, setAddMemberSearch] = useState("");
+  const [sidebarOpen, setSidebarOpen] = useState(false);
   const [pendingInvites, setPendingInvites] = useState<Invitation[]>([]);
   const [boardPendingInvites, setBoardPendingInvites] = useState<Invitation[]>([]);
   const [showInvites, setShowInvites] = useState(false);
@@ -891,8 +892,20 @@ export function App() {
 
   return (
     <div className="app-shell">
+      {/* ── Mobile topbar ──────────────────────────────── */}
+      <div className="mobile-topbar">
+        <button type="button" className="hamburger" onClick={() => setSidebarOpen((v) => !v)}>
+          <span /><span /><span />
+        </button>
+        <span className="brand-name">PM Board</span>
+        <button type="button" className="mobile-signout" onClick={signOut} title="Выйти">⏻</button>
+      </div>
+
+      {/* ── Sidebar backdrop ───────────────────────────── */}
+      {sidebarOpen && <div className="sidebar-backdrop" onClick={() => setSidebarOpen(false)} />}
+
       {/* ── Sidebar ────────────────────────────────────── */}
-      <aside className="sidebar">
+      <aside className={`sidebar${sidebarOpen ? " open" : ""}`}>
         <div className="sidebar-brand">
           <span className="brand-icon">⬡</span>
           <span className="brand-name">PM Board</span>
@@ -905,7 +918,7 @@ export function App() {
               key={board.id}
               type="button"
               className={`board-item ${board.id === selectedBoardId ? "active" : ""}`}
-              onClick={() => { setSelectedBoardId(board.id); setShowNewBoard(false); }}
+              onClick={() => { setSelectedBoardId(board.id); setShowNewBoard(false); setSidebarOpen(false); }}
             >
               <span className="board-item-icon">{board.title.charAt(0).toUpperCase()}</span>
               <span className="board-item-text">
