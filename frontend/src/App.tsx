@@ -258,6 +258,7 @@ export function App() {
   const [myTasks, setMyTasks] = useState<AssignedTask[]>([]);
   const [showMyTasks, setShowMyTasks] = useState(false);
   const [myTasksLoading, setMyTasksLoading] = useState(false);
+  const [showAnalytics, setShowAnalytics] = useState(false);
 
   const selectedBoard = useMemo(
     () => boards.find((board) => board.id === selectedBoardId) ?? null,
@@ -325,6 +326,54 @@ export function App() {
     () => myTasks.filter((t) => t.due_date && new Date(t.due_date) < new Date()).length,
     [myTasks],
   );
+
+  const analyticsData = useMemo(() => {
+    if (!selectedBoard || columns.length === 0) return null;
+    const all = Object.values(tasksByColumn).flat();
+    const now = new Date();
+    const weekEnd = new Date(now.getTime() + 7 * 24 * 60 * 60 * 1000);
+    const todayEnd = new Date(now); todayEnd.setHours(23, 59, 59, 999);
+
+    const doneCol = [...columns].sort((a, b) => b.position - a.position)[0];
+
+    const columnStats = columns
+      .slice()
+      .sort((a, b) => a.position - b.position)
+      .map((col) => ({
+        id: col.id,
+        title: col.title,
+        count: (tasksByColumn[col.id] ?? []).length,
+        isDone: col.id === doneCol?.id,
+      }));
+
+    const assigneeMap: Record<number, { name: string; total: number; overdue: number }> = {};
+    for (const task of all) {
+      if (!task.assignee_id) continue;
+      const u = usersById[task.assignee_id];
+      if (!assigneeMap[task.assignee_id]) {
+        assigneeMap[task.assignee_id] = { name: u?.name || u?.email || `#${task.assignee_id}`, total: 0, overdue: 0 };
+      }
+      assigneeMap[task.assignee_id].total++;
+      if (task.due_date && new Date(task.due_date) < now) assigneeMap[task.assignee_id].overdue++;
+    }
+
+    const priorityCount: Record<string, number> = { critical: 0, high: 0, medium: 0, low: 0, none: 0 };
+    for (const task of all) priorityCount[task.priority ?? "none"]++;
+
+    return {
+      total: all.length,
+      done: (tasksByColumn[doneCol?.id] ?? []).length,
+      doneColTitle: doneCol?.title ?? "",
+      columnStats,
+      assigneeStats: Object.values(assigneeMap).sort((a, b) => b.total - a.total),
+      unassigned: all.filter((t) => !t.assignee_id).length,
+      priorityCount,
+      overdue: all.filter((t) => t.due_date && new Date(t.due_date) < now).length,
+      dueToday: all.filter((t) => t.due_date && new Date(t.due_date) >= now && new Date(t.due_date) <= todayEnd).length,
+      dueWeek: all.filter((t) => t.due_date && new Date(t.due_date) > todayEnd && new Date(t.due_date) <= weekEnd).length,
+      noDue: all.filter((t) => !t.due_date).length,
+    };
+  }, [selectedBoard, columns, tasksByColumn, usersById]);
 
   useEffect(() => {
     if (!token) {
@@ -1130,7 +1179,8 @@ export function App() {
                 </div>
                 <button type="button" className={`bar-btn ${showFilters || hasFilters ? "active" : ""}`} onClick={() => { setShowLabels(false); setShowSettings(false); setShowFilters((v) => !v); }}>⚡ Фильтры{hasFilters ? " ●" : ""}</button>
                 <button type="button" className="bar-btn" onClick={() => { setShowLabels(true); setShowSettings(false); }}>🏷 Метки</button>
-                <button type="button" className="bar-btn" onClick={() => { setShowSettings(true); setShowLabels(false); if (selectedBoard?.owner_id === me.id) void loadBoardPendingInvites(selectedBoard.id); }}>⚙ Настройки</button>
+                <button type="button" className={`bar-btn ${showAnalytics ? "active" : ""}`} onClick={() => { setShowAnalytics((v) => !v); setShowSettings(false); setShowLabels(false); setShowFilters(false); }}>📊 Аналитика</button>
+                <button type="button" className="bar-btn" onClick={() => { setShowSettings(true); setShowLabels(false); setShowAnalytics(false); if (selectedBoard?.owner_id === me.id) void loadBoardPendingInvites(selectedBoard.id); }}>⚙ Настройки</button>
               </div>
             </div>
 
@@ -1270,8 +1320,143 @@ export function App() {
               </div>
             )}
 
+            {/* Analytics panel */}
+            {showAnalytics && analyticsData && (
+              <div className="analytics-panel">
+                {/* Summary cards */}
+                <div className="analytics-cards">
+                  <div className="analytics-card">
+                    <div className="analytics-card-value">{analyticsData.total}</div>
+                    <div className="analytics-card-label">Всего задач</div>
+                  </div>
+                  <div className="analytics-card done">
+                    <div className="analytics-card-value">{analyticsData.done}</div>
+                    <div className="analytics-card-label">Готово · {analyticsData.doneColTitle}</div>
+                  </div>
+                  <div className={`analytics-card ${analyticsData.overdue > 0 ? "danger" : ""}`}>
+                    <div className="analytics-card-value">{analyticsData.overdue}</div>
+                    <div className="analytics-card-label">Просрочено</div>
+                  </div>
+                  <div className="analytics-card">
+                    <div className="analytics-card-value">{analyticsData.unassigned}</div>
+                    <div className="analytics-card-label">Без исполнителя</div>
+                  </div>
+                  <div className="analytics-card">
+                    <div className="analytics-card-value">{analyticsData.dueToday}</div>
+                    <div className="analytics-card-label">Сегодня</div>
+                  </div>
+                  <div className="analytics-card">
+                    <div className="analytics-card-value">{analyticsData.dueWeek}</div>
+                    <div className="analytics-card-label">На этой неделе</div>
+                  </div>
+                </div>
+
+                <div className="analytics-grid">
+                  {/* По колонкам */}
+                  <div className="analytics-section">
+                    <div className="analytics-section-title">Распределение по колонкам</div>
+                    {analyticsData.columnStats.map((col) => (
+                      <div key={col.id} className="analytics-bar-row">
+                        <div className="analytics-bar-label">
+                          <span className={col.isDone ? "analytics-done-mark" : ""}>{col.title}</span>
+                          {col.isDone && <span className="analytics-hint">эвристика «готово»</span>}
+                        </div>
+                        <div className="analytics-bar-track">
+                          <div
+                            className={`analytics-bar-fill ${col.isDone ? "done" : ""}`}
+                            style={{ width: analyticsData.total > 0 ? `${(col.count / analyticsData.total) * 100}%` : "0%" }}
+                          />
+                        </div>
+                        <span className="analytics-bar-count">{col.count}</span>
+                      </div>
+                    ))}
+                    {analyticsData.total === 0 && <div className="analytics-empty">Нет задач</div>}
+                  </div>
+
+                  {/* По исполнителям */}
+                  <div className="analytics-section">
+                    <div className="analytics-section-title">Нагрузка по участникам</div>
+                    {analyticsData.assigneeStats.map((a) => (
+                      <div key={a.name} className="analytics-bar-row">
+                        <div className="analytics-bar-label">
+                          <span>{a.name}</span>
+                          {a.overdue > 0 && <span className="analytics-hint danger">⚠ {a.overdue} просрочено</span>}
+                        </div>
+                        <div className="analytics-bar-track">
+                          <div
+                            className="analytics-bar-fill assignee"
+                            style={{ width: analyticsData.total > 0 ? `${(a.total / analyticsData.total) * 100}%` : "0%" }}
+                          />
+                        </div>
+                        <span className="analytics-bar-count">{a.total}</span>
+                      </div>
+                    ))}
+                    {analyticsData.assigneeStats.length === 0 && <div className="analytics-empty">Нет назначенных задач</div>}
+                    {analyticsData.unassigned > 0 && (
+                      <div className="analytics-bar-row muted">
+                        <div className="analytics-bar-label"><span>Без исполнителя</span></div>
+                        <div className="analytics-bar-track">
+                          <div className="analytics-bar-fill muted" style={{ width: `${(analyticsData.unassigned / analyticsData.total) * 100}%` }} />
+                        </div>
+                        <span className="analytics-bar-count">{analyticsData.unassigned}</span>
+                      </div>
+                    )}
+                  </div>
+
+                  {/* Приоритеты */}
+                  <div className="analytics-section">
+                    <div className="analytics-section-title">Приоритеты</div>
+                    {(["critical", "high", "medium", "low"] as Priority[]).map((p) => (
+                      analyticsData.priorityCount[p] > 0 && (
+                        <div key={p} className="analytics-bar-row">
+                          <div className="analytics-bar-label">
+                            <span className="priority-badge" style={{ color: PRIORITY_COLOR[p], background: `${PRIORITY_COLOR[p]}18`, borderColor: `${PRIORITY_COLOR[p]}40` }}>
+                              {PRIORITY_LABEL[p]}
+                            </span>
+                          </div>
+                          <div className="analytics-bar-track">
+                            <div className="analytics-bar-fill" style={{ width: `${(analyticsData.priorityCount[p] / analyticsData.total) * 100}%`, background: PRIORITY_COLOR[p] }} />
+                          </div>
+                          <span className="analytics-bar-count">{analyticsData.priorityCount[p]}</span>
+                        </div>
+                      )
+                    ))}
+                    {analyticsData.priorityCount["none"] > 0 && (
+                      <div className="analytics-bar-row muted">
+                        <div className="analytics-bar-label"><span>Без приоритета</span></div>
+                        <div className="analytics-bar-track">
+                          <div className="analytics-bar-fill muted" style={{ width: `${(analyticsData.priorityCount["none"] / analyticsData.total) * 100}%` }} />
+                        </div>
+                        <span className="analytics-bar-count">{analyticsData.priorityCount["none"]}</span>
+                      </div>
+                    )}
+                    {analyticsData.total === 0 && <div className="analytics-empty">Нет задач</div>}
+                  </div>
+
+                  {/* Дедлайны */}
+                  <div className="analytics-section">
+                    <div className="analytics-section-title">Дедлайны</div>
+                    {[
+                      { label: "Просрочено", value: analyticsData.overdue, cls: "danger" },
+                      { label: "Сегодня", value: analyticsData.dueToday, cls: "warning" },
+                      { label: "На этой неделе", value: analyticsData.dueWeek, cls: "" },
+                      { label: "Нет дедлайна", value: analyticsData.noDue, cls: "muted" },
+                    ].map(({ label, value, cls }) => (
+                      <div key={label} className={`analytics-bar-row ${cls}`}>
+                        <div className="analytics-bar-label"><span>{label}</span></div>
+                        <div className="analytics-bar-track">
+                          <div className={`analytics-bar-fill ${cls}`} style={{ width: analyticsData.total > 0 ? `${(value / analyticsData.total) * 100}%` : "0%" }} />
+                        </div>
+                        <span className="analytics-bar-count">{value}</span>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              </div>
+            )}
+
             {/* List view */}
-            {viewMode === "list" && (
+            {!showAnalytics && viewMode === "list" && (
               <div className="list-view">
                 {columns.map((column) => {
                   const columnTasks = filteredTasksByColumn[column.id] ?? [];
@@ -1321,7 +1506,7 @@ export function App() {
             )}
 
             {/* Kanban */}
-            {viewMode === "kanban" && <div className="kanban-scroll">
+            {!showAnalytics && viewMode === "kanban" && <div className="kanban-scroll">
               <div className="kanban-board">
                 {columns.map((column) => {
                   const draft = getTaskDraft(taskDrafts, column.id);
