@@ -17,7 +17,17 @@ async def _get_task_or_404(task_id: int, user_id: int, db: DbDep):
     column = await column_service.get_by_id(db, task.column_id)
     if not await board_service.is_accessible(db, column.board_id, user_id):
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="No access to this board")
-    return task
+    return task, column.board_id
+
+
+async def _require_checklist_permission(task_id: int, user_id: int, db: DbDep) -> None:
+    task, board_id = await _get_task_or_404(task_id, user_id, db)
+    board = await board_service.get_by_id(db, board_id)
+    if task.assignee_id != user_id and (not board or board.owner_id != user_id):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Only the task assignee or board owner can update checklist items",
+        )
 
 
 @router.get("/tasks/{task_id}/checklist", response_model=list[ChecklistItemResponse])
@@ -47,7 +57,7 @@ async def update_checklist_item(
     item = await checklist_service.get_by_id(db, item_id)
     if not item:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Checklist item not found")
-    await _get_task_or_404(item.task_id, current_user.id, db)
+    await _require_checklist_permission(item.task_id, current_user.id, db)
     return await checklist_service.update(db, item, payload)
 
 

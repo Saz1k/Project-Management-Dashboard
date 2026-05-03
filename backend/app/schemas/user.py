@@ -14,9 +14,9 @@ class UserCreate(BaseModel):
     @classmethod
     def password_strength(cls, v: str) -> str:
         if len(v) < 8:
-            raise ValueError("Пароль должен содержать минимум 8 символов")
+            raise ValueError("Password must be at least 8 characters")
         if not any(c.isalpha() for c in v) or not any(c.isdigit() for c in v):
-            raise ValueError("Пароль должен содержать буквы и цифры")
+            raise ValueError("Password must contain letters and digits")
         return v
 
 
