@@ -96,6 +96,7 @@ type TaskDraft = {
   description: string;
   due_date: string;
   priority: Priority | "";
+  assignee_id: string;
 };
 
 type TaskDetailDraft = {
@@ -114,7 +115,7 @@ type FilterState = {
   overdue: boolean;
 };
 
-const PRIORITY_LABEL: Record<Priority, string> = { low: "Низкий", medium: "Средний", high: "Высокий", critical: "Критичный" };
+const PRIORITY_LABEL: Record<Priority, string> = { low: "Low", medium: "Medium", high: "High", critical: "Critical" };
 const PRIORITY_COLOR: Record<Priority, string> = { low: "#22c55e", medium: "#f59e0b", high: "#f97316", critical: "#ef4444" };
 
 const TOKEN_KEY = "pm-proj-token";
@@ -136,7 +137,7 @@ async function request<T>(path: string, init: RequestInit = {}, token?: string):
   });
 
   if (!response.ok) {
-    let message = `Ошибка: ${response.status}`;
+    let message = `Error: ${response.status}`;
     try {
       const payload = (await response.json()) as ApiError;
       if (Array.isArray(payload.detail)) {
@@ -192,7 +193,7 @@ function toDatetimeLocal(input: string | null): string {
 }
 
 function getTaskDraft(drafts: Record<number, TaskDraft>, columnId: number): TaskDraft {
-  return drafts[columnId] ?? { title: "", description: "", due_date: "", priority: "" };
+  return drafts[columnId] ?? { title: "", description: "", due_date: "", priority: "", assignee_id: "" };
 }
 
 function datePart(dt: string): string {
@@ -210,6 +211,7 @@ function joinDatetime(date: string, time: string): string {
 
 export function App() {
   const [token, setToken] = useState<string>(() => localStorage.getItem(TOKEN_KEY) ?? "");
+  const [bootstrapping, setBootstrapping] = useState<boolean>(() => !!localStorage.getItem(TOKEN_KEY));
   const [me, setMe] = useState<User | null>(null);
   const [users, setUsers] = useState<User[]>([]);
   const [boards, setBoards] = useState<Board[]>([]);
@@ -259,6 +261,7 @@ export function App() {
   const [showMyTasks, setShowMyTasks] = useState(false);
   const [myTasksLoading, setMyTasksLoading] = useState(false);
   const [showAnalytics, setShowAnalytics] = useState(false);
+  const [pendingVerification, setPendingVerification] = useState(false);
 
   const selectedBoard = useMemo(
     () => boards.find((board) => board.id === selectedBoardId) ?? null,
@@ -388,6 +391,16 @@ export function App() {
   }, [token]);
 
   useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const verifyToken = params.get("verify");
+    if (!verifyToken) return;
+    window.history.replaceState({}, "", window.location.pathname);
+    request<{ id: number }>(`/auth/verify/${verifyToken}`, {})
+      .then(() => setError(""))
+      .catch(() => {});
+  }, []);
+
+  useEffect(() => {
     if (!selectedBoardId || !token) {
       setColumns([]);
       setTasksByColumn({});
@@ -451,6 +464,7 @@ export function App() {
       setError(err instanceof Error ? err.message : "Failed to load session");
       signOut();
     } finally {
+      setBootstrapping(false);
       setLoading(false);
     }
   }
@@ -517,6 +531,7 @@ export function App() {
   }
 
   function signOut() {
+    setBootstrapping(false);
     localStorage.removeItem(TOKEN_KEY);
     setToken("");
     setMe(null);
@@ -532,11 +547,11 @@ export function App() {
     event.preventDefault();
     if (authMode === "register") {
       if (authForm.password.length < 8) {
-        setError("Пароль должен содержать минимум 8 символов");
+        setError("Password must be at least 8 characters");
         return;
       }
       if (!/[A-Za-z]/.test(authForm.password) || !/[0-9]/.test(authForm.password)) {
-        setError("Пароль должен содержать буквы и цифры");
+        setError("Password must contain letters and numbers");
         return;
       }
     }
@@ -554,16 +569,24 @@ export function App() {
       form.set("username", authForm.email);
       form.set("password", authForm.password);
 
-      const payload = await request<Token>("/auth/login", {
-        method: "POST",
-        body: form,
-        headers: {
-          "Content-Type": "application/x-www-form-urlencoded",
-        },
-      });
+      try {
+        const payload = await request<Token>("/auth/login", {
+          method: "POST",
+          body: form,
+          headers: {
+            "Content-Type": "application/x-www-form-urlencoded",
+          },
+        });
 
-      localStorage.setItem(TOKEN_KEY, payload.access_token);
-      setToken(payload.access_token);
+        localStorage.setItem(TOKEN_KEY, payload.access_token);
+        setToken(payload.access_token);
+      } catch (loginErr) {
+        if (authMode === "register" && loginErr instanceof Error && loginErr.message.toLowerCase().includes("not verified")) {
+          setPendingVerification(true);
+        } else {
+          throw loginErr;
+        }
+      }
     } catch (err) {
       setError(err instanceof Error ? err.message : "Authentication failed");
     } finally {
@@ -623,7 +646,7 @@ export function App() {
   }
 
   async function deleteBoard(boardId: number) {
-    if (!confirm("Удалить доску вместе со всеми колонками и задачами? Это действие нельзя отменить.")) return;
+    if (!confirm("Delete this board along with all its columns and tasks? This action cannot be undone.")) return;
     try {
       await request<void>(`/boards/${boardId}`, { method: "DELETE" }, token);
       const remaining = boards.filter((b) => b.id !== boardId);
@@ -631,7 +654,7 @@ export function App() {
       setSelectedBoardId(remaining[0]?.id ?? null);
       setShowSettings(false);
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Не удалось удалить доску");
+      setError(err instanceof Error ? err.message : "Failed to delete board");
     }
   }
 
@@ -672,13 +695,14 @@ export function App() {
             description: draft.description || null,
             due_date: draft.due_date ? new Date(draft.due_date).toISOString() : null,
             priority: draft.priority || null,
+            assignee_id: draft.assignee_id ? Number(draft.assignee_id) : null,
           }),
         },
         token,
       );
       setTaskDrafts((current) => ({
         ...current,
-        [columnId]: { title: "", description: "", due_date: "", priority: "" },
+        [columnId]: { title: "", description: "", due_date: "", priority: "", assignee_id: "" },
       }));
       await refreshSelectedBoard();
     } catch (err) {
@@ -810,7 +834,7 @@ export function App() {
   }
 
   async function deleteColumn(columnId: number) {
-    if (!confirm("Удалить колонку вместе со всеми задачами?")) return;
+    if (!confirm("Delete this column along with all its tasks?")) return;
     try {
       await request<void>(`/columns/${columnId}`, { method: "DELETE" }, token);
       await refreshSelectedBoard();
@@ -872,7 +896,7 @@ export function App() {
       );
       setBoards((curr) => curr.map((b) => (b.id === updated.id ? updated : b)));
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Не удалось удалить участника");
+      setError(err instanceof Error ? err.message : "Failed to remove member");
     }
   }
 
@@ -888,7 +912,7 @@ export function App() {
       const invites = await request<Invitation[]>(`/boards/${selectedBoardId}/invitations`, {}, token);
       setBoardPendingInvites(invites);
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Не удалось отправить приглашение");
+      setError(err instanceof Error ? err.message : "Failed to send invitation");
     }
   }
 
@@ -902,7 +926,7 @@ export function App() {
       setPendingInvites(invites);
       setBoards(boardList);
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Ошибка принятия приглашения");
+      setError(err instanceof Error ? err.message : "Failed to accept invitation");
     }
   }
 
@@ -911,7 +935,7 @@ export function App() {
       await request<Invitation>(`/invitations/${invId}/reject`, { method: "POST" }, token);
       setPendingInvites((curr) => curr.filter((i) => i.id !== invId));
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Ошибка отклонения приглашения");
+      setError(err instanceof Error ? err.message : "Failed to reject invitation");
     }
   }
 
@@ -920,7 +944,7 @@ export function App() {
       await request<void>(`/invitations/${invId}`, { method: "DELETE" }, token);
       setBoardPendingInvites((curr) => curr.filter((i) => i.id !== invId));
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Ошибка отмены приглашения");
+      setError(err instanceof Error ? err.message : "Failed to cancel invitation");
     }
   }
 
@@ -933,25 +957,42 @@ export function App() {
     }
   }
 
+  if (bootstrapping) {
+    return <div className="auth-loading"><div className="auth-loading-spinner" /></div>;
+  }
   if (!token || !me) {
+    if (pendingVerification) {
+      return (
+        <div className="auth-page">
+          <section className="auth-card verify-card">
+            <div className="auth-copy">
+              <span className="kicker">PM Dashboard</span>
+              <h1>Check your inbox</h1>
+              <p>We sent a verification link to <strong>{authForm.email}</strong>. Click it to activate your account.</p>
+            </div>
+            <button type="button" className="ghost-button" onClick={() => setPendingVerification(false)}>Back to sign in</button>
+          </section>
+        </div>
+      );
+    }
     return (
       <div className="auth-page">
         <section className="auth-card">
           <div className="auth-copy">
             <span className="kicker">PM Dashboard</span>
-            <h1>Управляй задачами без лишнего шума.</h1>
-            <p>Доски, колонки, задачи, исполнители и комментарии — всё в одном месте.</p>
+            <h1>Manage tasks without the noise.</h1>
+            <p>Boards, columns, tasks, assignees and comments — all in one place.</p>
           </div>
           <div className="auth-form-wrap">
             <div className="auth-tabs">
-              <button type="button" className={authMode === "login" ? "active" : ""} onClick={() => setAuthMode("login")}>Войти</button>
-              <button type="button" className={authMode === "register" ? "active" : ""} onClick={() => setAuthMode("register")}>Регистрация</button>
+              <button type="button" className={authMode === "login" ? "active" : ""} onClick={() => setAuthMode("login")}>Sign in</button>
+              <button type="button" className={authMode === "register" ? "active" : ""} onClick={() => setAuthMode("register")}>Register</button>
             </div>
             <form className="auth-form" onSubmit={handleAuthSubmit}>
               {authMode === "register" && (
                 <label className="field">
-                  <span>Имя</span>
-                  <input value={authForm.name} onChange={(e) => setAuthForm((c) => ({ ...c, name: e.target.value }))} placeholder="Иван Иванов" />
+                  <span>Name</span>
+                  <input value={authForm.name} onChange={(e) => setAuthForm((c) => ({ ...c, name: e.target.value }))} placeholder="John Doe" />
                 </label>
               )}
               <label className="field">
@@ -959,12 +1000,12 @@ export function App() {
                 <input value={authForm.email} onChange={(e) => setAuthForm((c) => ({ ...c, email: e.target.value }))} placeholder="you@example.com" type="email" />
               </label>
               <label className="field">
-                <span>Пароль</span>
+                <span>Password</span>
                 <input value={authForm.password} onChange={(e) => setAuthForm((c) => ({ ...c, password: e.target.value }))} placeholder="••••••" type="password" />
               </label>
               {error && <div className="alert error">{error}</div>}
               <button type="submit" className="primary-button" disabled={loading}>
-                {loading ? "Подождите…" : authMode === "login" ? "Войти" : "Создать аккаунт"}
+                {loading ? "Please wait…" : authMode === "login" ? "Sign in" : "Create account"}
               </button>
             </form>
           </div>
@@ -981,7 +1022,7 @@ export function App() {
           <span /><span /><span />
         </button>
         <span className="brand-name">PM Board</span>
-        <button type="button" className="mobile-signout" onClick={signOut} title="Выйти">⏻</button>
+        <button type="button" className="mobile-signout" onClick={signOut} title="Sign out">⏻</button>
       </div>
 
       {/* ── Sidebar backdrop ───────────────────────────── */}
@@ -1001,12 +1042,12 @@ export function App() {
         >
           <span className="board-item-icon">✓</span>
           <span className="board-item-text">
-            <strong>Мои задачи</strong>
-            <small>{myOverdueCount > 0 ? `⚠ ${myOverdueCount} просрочено` : "Назначено вам"}</small>
+            <strong>My Tasks</strong>
+            <small>{myOverdueCount > 0 ? `⚠ ${myOverdueCount} overdue` : "Assigned to you"}</small>
           </span>
         </button>
 
-        <div className="sidebar-section-label">Мои доски</div>
+        <div className="sidebar-section-label">My Boards</div>
         <div className="board-list">
           {boards.map((board) => (
             <button
@@ -1018,7 +1059,7 @@ export function App() {
               <span className="board-item-icon">{board.title.charAt(0).toUpperCase()}</span>
               <span className="board-item-text">
                 <strong>{board.title}</strong>
-                <small>{board.owner_id !== me.id ? "👥 Общая" : (board.description || "Без описания")}</small>
+                <small>{board.owner_id !== me.id ? "👥 Shared" : (board.description || "No description")}</small>
               </span>
             </button>
           ))}
@@ -1026,40 +1067,40 @@ export function App() {
 
         {showNewBoard ? (
           <form className="new-board-form" onSubmit={async (e) => { await createBoard(e); setShowNewBoard(false); }}>
-            <input value={boardDraft.title} onChange={(e) => setBoardDraft((c) => ({ ...c, title: e.target.value }))} placeholder="Название доски" autoFocus />
-            <input value={boardDraft.description} onChange={(e) => setBoardDraft((c) => ({ ...c, description: e.target.value }))} placeholder="Описание (необяз.)" />
+            <input value={boardDraft.title} onChange={(e) => setBoardDraft((c) => ({ ...c, title: e.target.value }))} placeholder="Board name" autoFocus />
+            <input value={boardDraft.description} onChange={(e) => setBoardDraft((c) => ({ ...c, description: e.target.value }))} placeholder="Description (optional)" />
             <div className="new-board-actions">
-              <button type="submit" className="primary-button">Создать</button>
-              <button type="button" className="ghost-button" onClick={() => setShowNewBoard(false)}>Отмена</button>
+              <button type="submit" className="primary-button">Create</button>
+              <button type="button" className="ghost-button" onClick={() => setShowNewBoard(false)}>Cancel</button>
             </div>
           </form>
         ) : (
           <button type="button" className="add-board-btn" onClick={() => setShowNewBoard(true)}>
-            <span>+</span> Новая доска
+            <span>+</span> New board
           </button>
         )}
 
         <div className="sidebar-bottom">
           {pendingInvites.length > 0 && (
             <button type="button" className={`invite-notify-btn ${showInvites ? "active" : ""}`} onClick={() => setShowInvites((v) => !v)}>
-              🔔 Приглашения
+              🔔 Invitations
               <span className="invite-count">{pendingInvites.length}</span>
             </button>
           )}
           <button type="button" className="ghost-button sidebar-signout" onClick={signOut}>
-            Выйти · {me.name || me.email}
+            Sign out · {me.name || me.email}
           </button>
         </div>
 
         {/* Pending invitations panel */}
         {showInvites && pendingInvites.length > 0 && (
           <div className="invite-panel">
-            <div className="invite-panel-title">Входящие приглашения</div>
+            <div className="invite-panel-title">Incoming invitations</div>
             {pendingInvites.map((inv) => (
               <div key={inv.id} className="invite-card">
                 <div className="invite-card-info">
                   <strong>{inv.board.title}</strong>
-                  <span>от {inv.inviter.name || inv.inviter.email}</span>
+                  <span>from {inv.inviter.name || inv.inviter.email}</span>
                 </div>
                 <div className="invite-card-actions">
                   <button type="button" className="primary-button" onClick={() => void acceptInvitation(inv.id)}>✓</button>
@@ -1079,26 +1120,26 @@ export function App() {
           <div className="my-tasks-view">
             <div className="board-bar">
               <div className="board-bar-left">
-                <h1 className="board-title">Мои задачи</h1>
+                <h1 className="board-title">My Tasks</h1>
                 <div className="board-stats">
-                  <span>{myTasks.length} задач</span>
-                  {myOverdueCount > 0 && <span className="stat-danger">⚠ {myOverdueCount} просрочено</span>}
+                  <span>{myTasks.length} tasks</span>
+                  {myOverdueCount > 0 && <span className="stat-danger">⚠ {myOverdueCount} overdue</span>}
                 </div>
               </div>
               <div className="board-bar-right">
                 <button type="button" className="bar-btn" onClick={() => void loadMyTasks()} disabled={myTasksLoading}>
-                  {myTasksLoading ? "Загрузка…" : "↻ Обновить"}
+                  {myTasksLoading ? "Loading…" : "↻ Refresh"}
                 </button>
               </div>
             </div>
 
-            {myTasksLoading && <div className="my-tasks-loading">Загрузка задач…</div>}
+            {myTasksLoading && <div className="my-tasks-loading">Loading tasks…</div>}
 
             {!myTasksLoading && myTasks.length === 0 && (
               <div className="empty-state">
                 <div className="empty-state-icon">✓</div>
-                <h2>Нет назначенных задач</h2>
-                <p>Задачи, в которых вы указаны исполнителем, появятся здесь.</p>
+                <h2>No assigned tasks</h2>
+                <p>Tasks where you are the assignee will appear here.</p>
               </div>
             )}
 
@@ -1113,7 +1154,7 @@ export function App() {
                     className="ghost-button my-tasks-open-board"
                     onClick={() => { setSelectedBoardId(board.id); setShowMyTasks(false); }}
                   >
-                    Открыть доску →
+                    Open board →
                   </button>
                 </div>
                 <div className="my-tasks-list">
@@ -1124,7 +1165,7 @@ export function App() {
                         key={task.id}
                         className={`list-row my-task-row${isOverdue ? " overdue-row" : ""}`}
                         onClick={() => { setSelectedBoardId(board.id); setShowMyTasks(false); }}
-                        title="Открыть доску с задачей"
+                        title="Open board with task"
                       >
                         <div className="list-row-main">
                           {task.priority && (
@@ -1158,9 +1199,9 @@ export function App() {
               <div className="board-bar-left">
                 <h1 className="board-title">{selectedBoard.title}</h1>
                 <div className="board-stats">
-                  <span>{totalTasks} задач</span>
-                  {overdueCount > 0 && <span className="stat-danger">⚠ {overdueCount} просрочено</span>}
-                  {todayCount > 0 && <span className="stat-warning">🔔 {todayCount} сегодня</span>}
+                  <span>{totalTasks} tasks</span>
+                  {overdueCount > 0 && <span className="stat-danger">⚠ {overdueCount} overdue</span>}
+                  {todayCount > 0 && <span className="stat-warning">🔔 {todayCount} today</span>}
                 </div>
               </div>
               <div className="board-bar-right">
@@ -1174,65 +1215,66 @@ export function App() {
                   </div>
                 )}
                 <div className="view-toggle">
-                  <button type="button" className={viewMode === "kanban" ? "active" : ""} onClick={() => setViewMode("kanban")} title="Канбан">⊞</button>
-                  <button type="button" className={viewMode === "list" ? "active" : ""} onClick={() => setViewMode("list")} title="Список">≡</button>
+                  <button type="button" className={viewMode === "kanban" ? "active" : ""} onClick={() => setViewMode("kanban")} title="Kanban">⊞</button>
+                  <button type="button" className={viewMode === "list" ? "active" : ""} onClick={() => setViewMode("list")} title="List">≡</button>
                 </div>
-                <button type="button" className={`bar-btn ${showFilters || hasFilters ? "active" : ""}`} onClick={() => { setShowLabels(false); setShowSettings(false); setShowFilters((v) => !v); }}>⚡ Фильтры{hasFilters ? " ●" : ""}</button>
-                <button type="button" className="bar-btn" onClick={() => { setShowLabels(true); setShowSettings(false); }}>🏷 Метки</button>
-                <button type="button" className={`bar-btn ${showAnalytics ? "active" : ""}`} onClick={() => { setShowAnalytics((v) => !v); setShowSettings(false); setShowLabels(false); setShowFilters(false); }}>📊 Аналитика</button>
-                <button type="button" className="bar-btn" onClick={() => { setShowSettings(true); setShowLabels(false); setShowAnalytics(false); if (selectedBoard?.owner_id === me.id) void loadBoardPendingInvites(selectedBoard.id); }}>⚙ Настройки</button>
+                <button type="button" className={`bar-btn ${showFilters || hasFilters ? "active" : ""} ${showAnalytics ? "disabled-btn" : ""}`} onClick={() => { if (showAnalytics) return; setShowLabels(false); setShowSettings(false); setShowFilters((v) => !v); }}>⚡ Filters{hasFilters ? " ●" : ""}</button>
+                <button type="button" className={`bar-btn ${showAnalytics ? "disabled-btn" : ""}`} onClick={() => { if (showAnalytics) return; setShowLabels(true); setShowSettings(false); }}>🏷 Labels</button>
+                <button type="button" className={`bar-btn ${showAnalytics ? "active" : ""}`} onClick={() => { setShowAnalytics((v) => !v); setShowSettings(false); setShowLabels(false); setShowFilters(false); }}>📊 Analytics</button>
+                <button type="button" className="bar-btn" onClick={() => { setShowSettings(true); setShowLabels(false); setShowAnalytics(false); if (selectedBoard?.owner_id === me.id) void loadBoardPendingInvites(selectedBoard.id); }}>⚙ Settings</button>
               </div>
             </div>
 
             {/* Filter bar */}
             {showFilters && <div className="filter-bar">
-              <input className="filter-search" value={filters.search} onChange={(e) => setFilters((f) => ({ ...f, search: e.target.value }))} placeholder="🔍 Поиск по названию…" />
+              <input className="filter-search" value={filters.search} onChange={(e) => setFilters((f) => ({ ...f, search: e.target.value }))} placeholder="🔍 Search by title…" />
               <select className="filter-select" value={filters.assignee} onChange={(e) => setFilters((f) => ({ ...f, assignee: e.target.value }))}>
-                <option value="">Все исполнители</option>
+                <option value="">All assignees</option>
                 {boardUsers.map((u) => <option key={u.id} value={u.id}>{u.name || u.email}</option>)}
               </select>
               <select className="filter-select" value={filters.label} onChange={(e) => setFilters((f) => ({ ...f, label: e.target.value }))}>
-                <option value="">Все метки</option>
+                <option value="">All labels</option>
                 {labels.map((l) => <option key={l.id} value={l.id}>{l.name}</option>)}
               </select>
               <select className="filter-select" value={filters.priority} onChange={(e) => setFilters((f) => ({ ...f, priority: e.target.value as Priority | "" }))}>
-                <option value="">Все приоритеты</option>
+                <option value="">All priorities</option>
                 {(["low","medium","high","critical"] as Priority[]).map((p) => <option key={p} value={p}>{PRIORITY_LABEL[p]}</option>)}
               </select>
               <label className="filter-check">
                 <input type="checkbox" checked={filters.overdue} onChange={(e) => setFilters((f) => ({ ...f, overdue: e.target.checked }))} />
-                Только просроченные
+                Overdue only
               </label>
-              {hasFilters && <button type="button" className="ghost-button" onClick={() => setFilters({ search: "", assignee: "", label: "", priority: "", overdue: false })}>✕ Сбросить</button>}
+              {hasFilters && <button type="button" className="ghost-button" onClick={() => setFilters({ search: "", assignee: "", label: "", priority: "", overdue: false })}>✕ Reset</button>}
+              <button type="button" className="close-btn" title="Close filters" onClick={() => setShowFilters(false)}>✕</button>
             </div>}
 
             {/* Settings inline panel */}
             {showSettings && (
               <div className="inline-panel">
                 <div className="inline-panel-header">
-                  <strong>Настройки доски</strong>
+                  <strong>Board settings</strong>
                   <button type="button" className="close-btn" onClick={() => setShowSettings(false)}>✕</button>
                 </div>
                 <div className="settings-columns">
                   {selectedBoard.owner_id === me.id && (
                     <form className="inline-panel-form" onSubmit={async (e) => { await saveBoard(e); setShowSettings(false); }}>
-                      <label className="field"><span>Название</span><input value={boardEditor.title} onChange={(e) => setBoardEditor((c) => ({ ...c, title: e.target.value }))} /></label>
-                      <label className="field"><span>Описание</span><textarea value={boardEditor.description} onChange={(e) => setBoardEditor((c) => ({ ...c, description: e.target.value }))} rows={2} /></label>
-                      <button type="submit" className="primary-button" disabled={savingBoard}>{savingBoard ? "Сохранение…" : "Сохранить"}</button>
-                      <button type="button" className="delete-board-btn" onClick={() => void deleteBoard(selectedBoard.id)}>🗑 Удалить доску</button>
+                      <label className="field"><span>Title</span><input value={boardEditor.title} onChange={(e) => setBoardEditor((c) => ({ ...c, title: e.target.value }))} /></label>
+                      <label className="field"><span>Description</span><textarea value={boardEditor.description} onChange={(e) => setBoardEditor((c) => ({ ...c, description: e.target.value }))} rows={2} /></label>
+                      <button type="submit" className="primary-button" disabled={savingBoard}>{savingBoard ? "Saving…" : "Save"}</button>
+                      <button type="button" className="delete-board-btn" onClick={() => void deleteBoard(selectedBoard.id)}>🗑 Delete board</button>
                     </form>
                   )}
 
                   {/* Members section */}
                   <div className="members-section">
-                    <div className="modal-section-title">Участники</div>
+                    <div className="modal-section-title">Members</div>
 
                     {/* Owner */}
                     <div className="member-row">
                       <div className="member-avatar">{(usersById[selectedBoard.owner_id]?.name || usersById[selectedBoard.owner_id]?.email || "?").charAt(0).toUpperCase()}</div>
                       <div className="member-info">
                         <span className="member-name">{usersById[selectedBoard.owner_id]?.name || usersById[selectedBoard.owner_id]?.email}</span>
-                        <span className="member-role">Владелец</span>
+                        <span className="member-role">Owner</span>
                       </div>
                     </div>
 
@@ -1242,10 +1284,10 @@ export function App() {
                         <div className="member-avatar">{(member.name || member.email).charAt(0).toUpperCase()}</div>
                         <div className="member-info">
                           <span className="member-name">{member.name || member.email}</span>
-                          <span className="member-role">Участник</span>
+                          <span className="member-role">Member</span>
                         </div>
                         {selectedBoard.owner_id === me.id && (
-                          <button type="button" className="member-remove" onClick={() => void removeMember(member.id)} title="Удалить">✕</button>
+                          <button type="button" className="member-remove" onClick={() => void removeMember(member.id)} title="Remove">✕</button>
                         )}
                       </div>
                     ))}
@@ -1256,38 +1298,60 @@ export function App() {
                         <div className="member-avatar pending-avatar">{(inv.invitee.name || inv.invitee.email).charAt(0).toUpperCase()}</div>
                         <div className="member-info">
                           <span className="member-name">{inv.invitee.name || inv.invitee.email}</span>
-                          <span className="member-role pending-label">Ожидает ответа…</span>
+                          <span className="member-role pending-label">Awaiting response…</span>
                         </div>
-                        <button type="button" className="member-remove" onClick={() => void cancelInvitation(inv.id)} title="Отменить приглашение">✕</button>
+                        <button type="button" className="member-remove" onClick={() => void cancelInvitation(inv.id)} title="Cancel invitation">✕</button>
                       </div>
                     ))}
 
                     {/* Invite member — only for owner */}
                     {selectedBoard.owner_id === me.id && (
                       <div className="member-add">
-                        <select
-                          value={addMemberSearch}
-                          onChange={(e) => setAddMemberSearch(e.target.value)}
-                        >
-                          <option value="">Пригласить пользователя…</option>
-                          {users
-                            .filter((u) =>
-                              u.id !== selectedBoard.owner_id &&
-                              !(selectedBoard.members ?? []).some((m) => m.id === u.id) &&
-                              !boardPendingInvites.some((i) => i.invitee.id === u.id)
-                            )
-                            .map((u) => (
-                              <option key={u.id} value={u.id}>{u.name || u.email}</option>
-                            ))}
-                        </select>
-                        <button
-                          type="button"
-                          className="primary-button"
-                          disabled={!addMemberSearch}
-                          onClick={() => void sendInvitation(Number(addMemberSearch))}
-                        >
-                          Пригласить
-                        </button>
+                        <div className="member-search-wrap">
+                          <input
+                            className="member-search-input"
+                            value={addMemberSearch}
+                            onChange={(e) => setAddMemberSearch(e.target.value)}
+                            placeholder="Search by name or email…"
+                          />
+                          {addMemberSearch.trim() && (
+                            <div className="member-search-results">
+                              {users
+                                .filter((u) =>
+                                  u.id !== selectedBoard.owner_id &&
+                                  !(selectedBoard.members ?? []).some((m) => m.id === u.id) &&
+                                  !boardPendingInvites.some((i) => i.invitee.id === u.id) &&
+                                  (
+                                    (u.name || "").toLowerCase().includes(addMemberSearch.toLowerCase()) ||
+                                    u.email.toLowerCase().includes(addMemberSearch.toLowerCase())
+                                  )
+                                )
+                                .slice(0, 8)
+                                .map((u) => (
+                                  <button
+                                    key={u.id}
+                                    type="button"
+                                    className="member-search-result"
+                                    onClick={() => { void sendInvitation(u.id); setAddMemberSearch(""); }}
+                                  >
+                                    <span className="member-search-avatar">{(u.name || u.email).charAt(0).toUpperCase()}</span>
+                                    <span className="member-search-info">
+                                      <span>{u.name || u.email}</span>
+                                      <small>{u.email}</small>
+                                    </span>
+                                  </button>
+                                ))}
+                              {users.filter((u) =>
+                                u.id !== selectedBoard.owner_id &&
+                                !(selectedBoard.members ?? []).some((m) => m.id === u.id) &&
+                                !boardPendingInvites.some((i) => i.invitee.id === u.id) &&
+                                ((u.name || "").toLowerCase().includes(addMemberSearch.toLowerCase()) || u.email.toLowerCase().includes(addMemberSearch.toLowerCase()))
+                              ).length === 0 && (
+                                <div className="member-search-empty">No users found</div>
+                              )}
+                            </div>
+                          )}
+                        </div>
                       </div>
                     )}
                   </div>
@@ -1299,7 +1363,7 @@ export function App() {
             {showLabels && (
               <div className="inline-panel">
                 <div className="inline-panel-header">
-                  <strong>Метки доски</strong>
+                  <strong>Board labels</strong>
                   <button type="button" className="close-btn" onClick={() => setShowLabels(false)}>✕</button>
                 </div>
                 <div className="labels-grid">
@@ -1309,13 +1373,13 @@ export function App() {
                 </div>
                 <form className="inline-panel-form" onSubmit={createLabel}>
                   <div className="label-create-row">
-                    <input value={labelDraft.name} onChange={(e) => setLabelDraft((c) => ({ ...c, name: e.target.value }))} placeholder="Название метки" />
+                    <input value={labelDraft.name} onChange={(e) => setLabelDraft((c) => ({ ...c, name: e.target.value }))} placeholder="Label name" />
                     <label className="color-pick">
                       <input type="color" value={labelDraft.color} onChange={(e) => setLabelDraft((c) => ({ ...c, color: e.target.value }))} />
                       <span className="color-preview" style={{ background: labelDraft.color }} />
                     </label>
                   </div>
-                  <button type="submit" className="primary-button">Добавить метку</button>
+                  <button type="submit" className="primary-button">Add label</button>
                 </form>
               </div>
             )}
@@ -1323,43 +1387,46 @@ export function App() {
             {/* Analytics panel */}
             {showAnalytics && analyticsData && (
               <div className="analytics-panel">
+                <div className="analytics-close-row">
+                  <button type="button" className="close-btn" title="Close analytics" onClick={() => setShowAnalytics(false)}>✕</button>
+                </div>
                 {/* Summary cards */}
                 <div className="analytics-cards">
                   <div className="analytics-card">
                     <div className="analytics-card-value">{analyticsData.total}</div>
-                    <div className="analytics-card-label">Всего задач</div>
+                    <div className="analytics-card-label">Total tasks</div>
                   </div>
                   <div className="analytics-card done">
                     <div className="analytics-card-value">{analyticsData.done}</div>
-                    <div className="analytics-card-label">Готово · {analyticsData.doneColTitle}</div>
+                    <div className="analytics-card-label">Done · {analyticsData.doneColTitle}</div>
                   </div>
                   <div className={`analytics-card ${analyticsData.overdue > 0 ? "danger" : ""}`}>
                     <div className="analytics-card-value">{analyticsData.overdue}</div>
-                    <div className="analytics-card-label">Просрочено</div>
+                    <div className="analytics-card-label">Overdue</div>
                   </div>
                   <div className="analytics-card">
                     <div className="analytics-card-value">{analyticsData.unassigned}</div>
-                    <div className="analytics-card-label">Без исполнителя</div>
+                    <div className="analytics-card-label">Unassigned</div>
                   </div>
                   <div className="analytics-card">
                     <div className="analytics-card-value">{analyticsData.dueToday}</div>
-                    <div className="analytics-card-label">Сегодня</div>
+                    <div className="analytics-card-label">Today</div>
                   </div>
                   <div className="analytics-card">
                     <div className="analytics-card-value">{analyticsData.dueWeek}</div>
-                    <div className="analytics-card-label">На этой неделе</div>
+                    <div className="analytics-card-label">This week</div>
                   </div>
                 </div>
 
                 <div className="analytics-grid">
-                  {/* По колонкам */}
+                  {/* Tasks per column */}
                   <div className="analytics-section">
-                    <div className="analytics-section-title">Распределение по колонкам</div>
+                    <div className="analytics-section-title">Tasks per column</div>
                     {analyticsData.columnStats.map((col) => (
                       <div key={col.id} className="analytics-bar-row">
                         <div className="analytics-bar-label">
                           <span className={col.isDone ? "analytics-done-mark" : ""}>{col.title}</span>
-                          {col.isDone && <span className="analytics-hint">эвристика «готово»</span>}
+                          {col.isDone && <span className="analytics-hint">heuristic &apos;done&apos;</span>}
                         </div>
                         <div className="analytics-bar-track">
                           <div
@@ -1370,17 +1437,17 @@ export function App() {
                         <span className="analytics-bar-count">{col.count}</span>
                       </div>
                     ))}
-                    {analyticsData.total === 0 && <div className="analytics-empty">Нет задач</div>}
+                    {analyticsData.total === 0 && <div className="analytics-empty">No tasks</div>}
                   </div>
 
-                  {/* По исполнителям */}
+                  {/* Assignee load */}
                   <div className="analytics-section">
-                    <div className="analytics-section-title">Нагрузка по участникам</div>
+                    <div className="analytics-section-title">Assignee load</div>
                     {analyticsData.assigneeStats.map((a) => (
                       <div key={a.name} className="analytics-bar-row">
                         <div className="analytics-bar-label">
                           <span>{a.name}</span>
-                          {a.overdue > 0 && <span className="analytics-hint danger">⚠ {a.overdue} просрочено</span>}
+                          {a.overdue > 0 && <span className="analytics-hint danger">⚠ {a.overdue} overdue</span>}
                         </div>
                         <div className="analytics-bar-track">
                           <div
@@ -1391,10 +1458,10 @@ export function App() {
                         <span className="analytics-bar-count">{a.total}</span>
                       </div>
                     ))}
-                    {analyticsData.assigneeStats.length === 0 && <div className="analytics-empty">Нет назначенных задач</div>}
+                    {analyticsData.assigneeStats.length === 0 && <div className="analytics-empty">No assigned tasks</div>}
                     {analyticsData.unassigned > 0 && (
                       <div className="analytics-bar-row muted">
-                        <div className="analytics-bar-label"><span>Без исполнителя</span></div>
+                        <div className="analytics-bar-label"><span>Unassigned</span></div>
                         <div className="analytics-bar-track">
                           <div className="analytics-bar-fill muted" style={{ width: `${(analyticsData.unassigned / analyticsData.total) * 100}%` }} />
                         </div>
@@ -1403,9 +1470,9 @@ export function App() {
                     )}
                   </div>
 
-                  {/* Приоритеты */}
+                  {/* Priorities */}
                   <div className="analytics-section">
-                    <div className="analytics-section-title">Приоритеты</div>
+                    <div className="analytics-section-title">Priorities</div>
                     {(["critical", "high", "medium", "low"] as Priority[]).map((p) => (
                       analyticsData.priorityCount[p] > 0 && (
                         <div key={p} className="analytics-bar-row">
@@ -1423,24 +1490,24 @@ export function App() {
                     ))}
                     {analyticsData.priorityCount["none"] > 0 && (
                       <div className="analytics-bar-row muted">
-                        <div className="analytics-bar-label"><span>Без приоритета</span></div>
+                        <div className="analytics-bar-label"><span>No priority</span></div>
                         <div className="analytics-bar-track">
                           <div className="analytics-bar-fill muted" style={{ width: `${(analyticsData.priorityCount["none"] / analyticsData.total) * 100}%` }} />
                         </div>
                         <span className="analytics-bar-count">{analyticsData.priorityCount["none"]}</span>
                       </div>
                     )}
-                    {analyticsData.total === 0 && <div className="analytics-empty">Нет задач</div>}
+                    {analyticsData.total === 0 && <div className="analytics-empty">No tasks</div>}
                   </div>
 
-                  {/* Дедлайны */}
+                  {/* Deadlines */}
                   <div className="analytics-section">
-                    <div className="analytics-section-title">Дедлайны</div>
+                    <div className="analytics-section-title">Deadlines</div>
                     {[
-                      { label: "Просрочено", value: analyticsData.overdue, cls: "danger" },
-                      { label: "Сегодня", value: analyticsData.dueToday, cls: "warning" },
-                      { label: "На этой неделе", value: analyticsData.dueWeek, cls: "" },
-                      { label: "Нет дедлайна", value: analyticsData.noDue, cls: "muted" },
+                      { label: "Overdue", value: analyticsData.overdue, cls: "danger" },
+                      { label: "Today", value: analyticsData.dueToday, cls: "warning" },
+                      { label: "This week", value: analyticsData.dueWeek, cls: "" },
+                      { label: "No deadline", value: analyticsData.noDue, cls: "muted" },
                     ].map(({ label, value, cls }) => (
                       <div key={label} className={`analytics-bar-row ${cls}`}>
                         <div className="analytics-bar-label"><span>{label}</span></div>
@@ -1467,7 +1534,7 @@ export function App() {
                         <span className="col-count">{columnTasks.length}</span>
                       </div>
                       {columnTasks.length === 0 ? (
-                        <div className="list-empty">Нет задач</div>
+                        <div className="list-empty">No tasks</div>
                       ) : columnTasks.map((task) => {
                         const assignee = task.assignee_id ? usersById[task.assignee_id] : null;
                         const isOverdue = task.due_date && new Date(task.due_date) < new Date();
@@ -1528,13 +1595,13 @@ export function App() {
                       }}
                     >
                       <div className="column-header">
-                        <button type="button" className="col-collapse-btn" onClick={() => toggleColCollapse(column.id)} title={isCollapsed ? "Развернуть" : "Свернуть"}>
+                        <button type="button" className="col-collapse-btn" onClick={() => toggleColCollapse(column.id)} title={isCollapsed ? "Expand" : "Collapse"}>
                           {isCollapsed ? "▶" : "▼"}
                         </button>
                         <h3>{column.title}</h3>
                         <div className="col-header-right">
                           <span className="col-count">{columnTasks.length}</span>
-                          <button type="button" className="col-delete-btn" title="Удалить колонку" onClick={() => void deleteColumn(column.id)}>🗑</button>
+                          <button type="button" className="col-delete-btn" title="Delete column" onClick={() => void deleteColumn(column.id)}>🗑</button>
                         </div>
                       </div>
 
@@ -1577,7 +1644,7 @@ export function App() {
                                 {assignee && <span className="task-assignee">👤 {assignee.name || assignee.email}</span>}
                               </div>
                               <div className="task-card-actions">
-                                <span className="move-chip danger" onClick={(e) => { e.stopPropagation(); void deleteTask(task.id); }}>🗑 Удалить</span>
+                                <span className="move-chip danger" onClick={(e) => { e.stopPropagation(); void deleteTask(task.id); }}>🗑 Delete</span>
                               </div>
                             </button>
                           );
@@ -1589,18 +1656,18 @@ export function App() {
                           <input
                             value={draft.title}
                             onChange={(e) => setTaskDrafts((c) => ({ ...c, [column.id]: { ...getTaskDraft(c, column.id), title: e.target.value } }))}
-                            placeholder="Название задачи"
+                            placeholder="Task title"
                             autoFocus
                           />
                           <textarea
                             value={draft.description}
                             onChange={(e) => setTaskDrafts((c) => ({ ...c, [column.id]: { ...getTaskDraft(c, column.id), description: e.target.value } }))}
-                            placeholder="Описание (необяз.)"
+                            placeholder="Description (optional)"
                             rows={2}
                           />
                           <div className="date-time-row">
                             <label className="field">
-                              <span>Дата</span>
+                              <span>Date</span>
                               <input
                                 type="date"
                                 value={datePart(draft.due_date)}
@@ -1608,7 +1675,7 @@ export function App() {
                               />
                             </label>
                             <label className="field">
-                              <span>Время</span>
+                              <span>Time</span>
                               <input
                                 type="time"
                                 value={timePart(draft.due_date)}
@@ -1617,19 +1684,26 @@ export function App() {
                             </label>
                           </div>
                           <label className="field">
-                            <span>Приоритет</span>
+                            <span>Assignee</span>
+                            <select value={draft.assignee_id} onChange={(e) => setTaskDrafts((c) => ({ ...c, [column.id]: { ...getTaskDraft(c, column.id), assignee_id: e.target.value } }))}>
+                              <option value="">Unassigned</option>
+                              {boardUsers.map((u) => <option key={u.id} value={u.id}>{u.name || u.email}</option>)}
+                            </select>
+                          </label>
+                          <label className="field">
+                            <span>Priority</span>
                             <select value={draft.priority} onChange={(e) => setTaskDrafts((c) => ({ ...c, [column.id]: { ...getTaskDraft(c, column.id), priority: e.target.value as Priority | "" } }))}>
-                              <option value="">Без приоритета</option>
+                              <option value="">No priority</option>
                               {(["low","medium","high","critical"] as Priority[]).map((p) => <option key={p} value={p}>{PRIORITY_LABEL[p]}</option>)}
                             </select>
                           </label>
                           <div className="add-task-actions">
-                            <button type="submit" className="primary-button">Добавить</button>
-                            <button type="button" className="ghost-button" onClick={() => setAddingTaskCol(null)}>Отмена</button>
+                            <button type="submit" className="primary-button">Add</button>
+                            <button type="button" className="ghost-button" onClick={() => setAddingTaskCol(null)}>Cancel</button>
                           </div>
                         </form>
                       ) : (
-                        !isCollapsed && <button type="button" className="add-task-btn" onClick={() => setAddingTaskCol(column.id)}>+ Добавить задачу</button>
+                        !isCollapsed && <button type="button" className="add-task-btn" onClick={() => setAddingTaskCol(column.id)}>+ Add task</button>
                       )}
                     </article>
                   );
@@ -1639,14 +1713,14 @@ export function App() {
                 <div className="add-column-panel">
                   {addingColumn ? (
                     <form onSubmit={async (e) => { await createColumn(e); setAddingColumn(false); }} className="add-col-form">
-                      <input value={columnTitle} onChange={(e) => setColumnTitle(e.target.value)} placeholder="Название колонки" autoFocus />
+                      <input value={columnTitle} onChange={(e) => setColumnTitle(e.target.value)} placeholder="Column title" autoFocus />
                       <div className="add-task-actions">
-                        <button type="submit" className="primary-button">Создать</button>
-                        <button type="button" className="ghost-button" onClick={() => setAddingColumn(false)}>Отмена</button>
+                        <button type="submit" className="primary-button">Create</button>
+                        <button type="button" className="ghost-button" onClick={() => setAddingColumn(false)}>Cancel</button>
                       </div>
                     </form>
                   ) : (
-                    <button type="button" className="add-column-btn" onClick={() => setAddingColumn(true)}>+ Добавить колонку</button>
+                    <button type="button" className="add-column-btn" onClick={() => setAddingColumn(true)}>+ Add column</button>
                   )}
                 </div>
               </div>
@@ -1655,8 +1729,8 @@ export function App() {
         ) : (
           <div className="empty-state">
             <div className="empty-state-icon">⬡</div>
-            <h2>Выберите доску</h2>
-            <p>Выберите доску из списка слева или создайте новую.</p>
+            <h2>Select a board</h2>
+            <p>Select a board from the list or create a new one.</p>
           </div>
         )}
       </div>
@@ -1666,75 +1740,85 @@ export function App() {
         <div className="modal-backdrop" onClick={() => setActiveTask(null)}>
           <div className="modal" onClick={(e) => e.stopPropagation()}>
             <div className="modal-header">
-              <h2>Детали задачи</h2>
+              <h2>Task details</h2>
               <button type="button" className="close-btn" onClick={() => setActiveTask(null)}>✕</button>
             </div>
             <div className="modal-body">
               <div className="modal-left">
                 <form className="form-stack" onSubmit={updateTaskDetails}>
                   <label className="field">
-                    <span>Название</span>
+                    <span>Title</span>
                     <input value={taskDetailDraft.title} onChange={(e) => setTaskDetailDraft((c) => ({ ...c, title: e.target.value }))} />
                   </label>
                   <label className="field">
-                    <span>Описание</span>
-                    <textarea value={taskDetailDraft.description} onChange={(e) => setTaskDetailDraft((c) => ({ ...c, description: e.target.value }))} rows={4} placeholder="Добавьте описание…" />
+                    <span>Description</span>
+                    <textarea value={taskDetailDraft.description} onChange={(e) => setTaskDetailDraft((c) => ({ ...c, description: e.target.value }))} rows={4} placeholder="Add a description…" />
                   </label>
                   <div className="field-row">
                     <label className="field">
-                      <span>Дата</span>
+                      <span>Date</span>
                       <input type="date" value={datePart(taskDetailDraft.due_date)} onChange={(e) => setTaskDetailDraft((c) => ({ ...c, due_date: joinDatetime(e.target.value, timePart(c.due_date)) }))} />
                     </label>
                     <label className="field">
-                      <span>Время</span>
+                      <span>Time</span>
                       <input type="time" value={timePart(taskDetailDraft.due_date)} onChange={(e) => setTaskDetailDraft((c) => ({ ...c, due_date: joinDatetime(datePart(c.due_date), e.target.value) }))} />
                     </label>
                   </div>
                   <div className="field-row">
                     <label className="field">
-                      <span>Исполнитель</span>
+                      <span>Assignee</span>
                       <select value={taskDetailDraft.assignee_id} onChange={(e) => setTaskDetailDraft((c) => ({ ...c, assignee_id: e.target.value }))}>
-                        <option value="">Не назначен</option>
+                        <option value="">Unassigned</option>
                         {boardUsers.map((u) => <option key={u.id} value={u.id}>{u.name || u.email}</option>)}
                       </select>
                     </label>
                     <label className="field">
-                      <span>Приоритет</span>
+                      <span>Priority</span>
                       <select value={taskDetailDraft.priority} onChange={(e) => setTaskDetailDraft((c) => ({ ...c, priority: e.target.value as Priority | "" }))}>
-                        <option value="">Без приоритета</option>
+                        <option value="">No priority</option>
                         {(["low","medium","high","critical"] as Priority[]).map((p) => <option key={p} value={p}>{PRIORITY_LABEL[p]}</option>)}
                       </select>
                     </label>
                   </div>
-                  <button type="submit" className="primary-button" disabled={savingTask}>{savingTask ? "Сохранение…" : "Сохранить изменения"}</button>
+                  <button type="submit" className="primary-button" disabled={savingTask}>{savingTask ? "Saving…" : "Save changes"}</button>
                 </form>
 
                 <div className="modal-section">
-                  <div className="modal-section-title">Чеклист · {activeTask.checklist.filter((i) => i.completed).length}/{activeTask.checklist.length}</div>
+                  <div className="modal-section-title">Checklist · {activeTask.checklist.filter((i) => i.completed).length}/{activeTask.checklist.length}</div>
                   {activeTask.checklist.length > 0 && (
                     <div className="checklist-bar-full">
                       <div className="checklist-fill" style={{ width: `${(activeTask.checklist.filter((i) => i.completed).length / activeTask.checklist.length) * 100}%` }} />
                     </div>
                   )}
-                  <div className="checklist-list">
-                    {activeTask.checklist.map((item) => (
-                      <div key={item.id} className={`checklist-item ${item.completed ? "done" : ""}`}>
-                        <input type="checkbox" checked={item.completed} onChange={() => void toggleChecklistItem(activeTask.id, item)} />
-                        <span>{item.text}</span>
-                        <button type="button" className="checklist-del" onClick={() => void deleteChecklistItem(activeTask.id, item.id)}>✕</button>
-                      </div>
-                    ))}
-                  </div>
-                  <div className="checklist-add">
-                    <input value={newChecklistText} onChange={(e) => setNewChecklistText(e.target.value)} placeholder="Новый пункт…" onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); void addChecklistItem(activeTask.id); } }} />
-                    <button type="button" className="primary-button" onClick={() => void addChecklistItem(activeTask.id)}>+</button>
-                  </div>
+                  {(() => {
+                    const canEditChecklist = !!(me && activeTask && (me.id === activeTask.assignee_id || me.id === selectedBoard?.owner_id));
+                    return (
+                      <>
+                        <div className="checklist-list">
+                          {activeTask.checklist.map((item) => (
+                            <div key={item.id} className={`checklist-item ${item.completed ? "done" : ""}`}>
+                              <input type="checkbox" checked={item.completed} disabled={!canEditChecklist} onChange={() => void toggleChecklistItem(activeTask.id, item)} />
+                              <span>{item.text}</span>
+                              <button type="button" className="checklist-del" disabled={!canEditChecklist} onClick={() => void deleteChecklistItem(activeTask.id, item.id)}>✕</button>
+                            </div>
+                          ))}
+                        </div>
+                        {!canEditChecklist && activeTask.checklist.length > 0 && (
+                          <p className="checklist-abac-note">Only the assignee and board owner can edit this checklist.</p>
+                        )}
+                        <div className="checklist-add">
+                          <input value={newChecklistText} disabled={!canEditChecklist} onChange={(e) => setNewChecklistText(e.target.value)} placeholder="New item…" onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); void addChecklistItem(activeTask.id); } }} />
+                          <button type="button" className="primary-button" disabled={!canEditChecklist} onClick={() => void addChecklistItem(activeTask.id)}>+</button>
+                        </div>
+                      </>
+                    );
+                  })()}
                 </div>
 
                 <div className="modal-section">
-                  <div className="modal-section-title">Метки</div>
+                  <div className="modal-section-title">Labels</div>
                   <div className="toggle-list">
-                    {labels.length === 0 && <span className="muted-text">Нет меток. Создайте их через кнопку «Метки» на доске.</span>}
+                    {labels.length === 0 && <span className="muted-text">No labels. Create them via the Labels button on the board.</span>}
                     {labels.map((label) => {
                       const assigned = activeTask.labels.some((item) => item.id === label.id);
                       return (
@@ -1750,16 +1834,16 @@ export function App() {
               </div>
 
               <div className="modal-right">
-                <div className="modal-section-title">Комментарии · {comments.length}</div>
+                <div className="modal-section-title">Comments · {comments.length}</div>
                 <form className="form-stack" onSubmit={createComment}>
-                  <textarea value={commentDraft} onChange={(e) => setCommentDraft(e.target.value)} rows={3} placeholder="Напишите комментарий…" />
-                  <button type="submit" className="secondary-button solid">Отправить</button>
+                  <textarea value={commentDraft} onChange={(e) => setCommentDraft(e.target.value)} rows={3} placeholder="Write a comment…" />
+                  <button type="submit" className="secondary-button solid">Send</button>
                 </form>
                 <div className="comment-list">
                   {comments.map((comment) => (
                     <article key={comment.id} className="comment-card">
                       <div className="comment-card-header">
-                        <strong>{usersById[comment.author_id]?.name || usersById[comment.author_id]?.email || `Пользователь #${comment.author_id}`}</strong>
+                        <strong>{usersById[comment.author_id]?.name || usersById[comment.author_id]?.email || `User #${comment.author_id}`}</strong>
                         <span>{formatDateTime(comment.created_at)}</span>
                       </div>
                       <p>{comment.content}</p>

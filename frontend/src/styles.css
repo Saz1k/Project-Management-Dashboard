@@ -1062,6 +1062,93 @@ input[type="datetime-local"] { color-scheme: light; }
 .list-row-meta { display: flex; align-items: center; flex-wrap: wrap; gap: 6px; flex: none; }
 .list-row .move-chip { flex: none; }
 
+/* ── Auth loading splash ──────────────────────────── */
+.auth-loading {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 100dvh;
+  background: var(--bg);
+}
+.auth-loading-spinner {
+  width: 36px;
+  height: 36px;
+  border: 3px solid var(--border);
+  border-top-color: #818cf8;
+  border-radius: 50%;
+  animation: spin .7s linear infinite;
+}
+@keyframes spin { to { transform: rotate(360deg); } }
+
+/* ── Disabled bar buttons ─────────────────────────── */
+.bar-btn.disabled-btn { opacity: .4; cursor: not-allowed; }
+
+/* ── Analytics close row ──────────────────────────── */
+.analytics-close-row {
+  display: flex;
+  justify-content: flex-end;
+  margin-bottom: -8px;
+}
+
+/* ── Member search ────────────────────────────────── */
+.member-search-wrap { position: relative; }
+.member-search-input {
+  width: 100%;
+  font-size: .84rem;
+  padding: .4rem .7rem;
+  border: 1.5px solid var(--border);
+  border-radius: var(--r-sm);
+  background: var(--surface);
+  color: var(--text);
+}
+.member-search-input:focus { outline: none; border-color: #818cf8; }
+.member-search-results {
+  position: absolute;
+  top: calc(100% + 4px);
+  left: 0;
+  right: 0;
+  background: var(--surface);
+  border: 1.5px solid var(--border);
+  border-radius: var(--r-md);
+  box-shadow: 0 8px 24px rgba(0,0,0,.25);
+  z-index: 50;
+  max-height: 220px;
+  overflow-y: auto;
+}
+.member-search-result {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  padding: 8px 12px;
+  background: none;
+  border: none;
+  cursor: pointer;
+  text-align: left;
+  transition: background .1s;
+  color: var(--text);
+}
+.member-search-result:hover { background: var(--surface-2); }
+.member-search-avatar {
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+  background: rgba(129,140,248,.2);
+  color: #818cf8;
+  font-size: .78rem;
+  font-weight: 700;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
+.member-search-info { display: flex; flex-direction: column; gap: 1px; font-size: .82rem; }
+.member-search-info small { color: var(--muted); font-size: .72rem; }
+.member-search-empty { padding: 10px 12px; font-size: .82rem; color: var(--muted); font-style: italic; }
+
+/* ── Checklist ABAC note ──────────────────────────── */
+.checklist-abac-note { font-size: .76rem; color: var(--muted); font-style: italic; margin: 0; }
+
 /* ── Analytics panel ─────────────────────────────── */
 .analytics-panel {
   flex: 1;
