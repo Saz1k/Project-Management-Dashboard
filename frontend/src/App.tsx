@@ -1244,8 +1244,10 @@ export function App() {
                 <input type="checkbox" checked={filters.overdue} onChange={(e) => setFilters((f) => ({ ...f, overdue: e.target.checked }))} />
                 Overdue only
               </label>
-              {hasFilters && <button type="button" className="ghost-button" onClick={() => setFilters({ search: "", assignee: "", label: "", priority: "", overdue: false })}>✕ Reset</button>}
-              <button type="button" className="close-btn" title="Close filters" onClick={() => setShowFilters(false)}>✕</button>
+              <div className="filter-bar-actions">
+                {hasFilters && <button type="button" className="filter-reset-btn" title="Reset filters" onClick={() => setFilters({ search: "", assignee: "", label: "", priority: "", overdue: false })}>↺</button>}
+                <button type="button" className="close-btn" title="Close filters" onClick={() => setShowFilters(false)}>✕</button>
+              </div>
             </div>}
 
             {/* Settings inline panel */}

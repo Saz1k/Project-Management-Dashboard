@@ -889,6 +889,28 @@ input[type="datetime-local"] { color-scheme: light; }
   flex: none;
   animation: slideDown .15s ease;
 }
+.filter-bar-actions {
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  flex-shrink: 0;
+}
+.filter-reset-btn {
+  width: 28px;
+  height: 28px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: none;
+  border: 1.5px solid var(--border);
+  border-radius: var(--r-sm);
+  color: var(--muted);
+  font-size: 1rem;
+  cursor: pointer;
+  transition: color .12s, border-color .12s;
+}
+.filter-reset-btn:hover { color: var(--text); border-color: var(--text-2); }
 .filter-search {
   width: 200px;
   flex: none;
@@ -1250,6 +1272,7 @@ input[type="datetime-local"] { color-scheme: light; }
   display: flex;
   flex-direction: column;
   min-height: 0;
+  padding-top: 20px;
 }
 .my-tasks-loading {
   padding: 32px;
