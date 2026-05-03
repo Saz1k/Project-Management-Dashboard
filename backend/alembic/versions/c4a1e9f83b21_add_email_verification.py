@@ -1,7 +1,7 @@
 """add email verification
 
 Revision ID: c4a1e9f83b21
-Revises: 10332de35f4e
+Revises: 2078e198554f
 Create Date: 2026-05-03
 
 """
@@ -9,7 +9,7 @@ from alembic import op
 import sqlalchemy as sa
 
 revision = "c4a1e9f83b21"
-down_revision = "10332de35f4e"
+down_revision = "2078e198554f"
 branch_labels = None
 depends_on = None
 
