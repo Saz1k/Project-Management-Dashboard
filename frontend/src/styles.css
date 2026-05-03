@@ -1272,7 +1272,7 @@ input[type="datetime-local"] { color-scheme: light; }
   display: flex;
   flex-direction: column;
   min-height: 0;
-  padding-top: 20px;
+  padding-bottom: 20px;
 }
 .my-tasks-loading {
   padding: 32px;
